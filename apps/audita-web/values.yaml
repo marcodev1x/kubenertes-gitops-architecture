@@ -1,0 +1,44 @@
+image:
+  name: ghcr.io/****/audita-web
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 640Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPU: 70
+
+istio:
+  proxy:
+    cpu: 25m
+    memory: 48Mi
+    cpuLimit: 200m
+    memoryLimit: 192Mi
+
+env:
+  NODE_ENV: "production"
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+  NODE_OPTIONS: "--max-old-space-size=480"
+
+secretEnv: {}
+
+ingress:
+  enabled: true
+  host: app.****
+  prefix: /
+  timeout: 30s

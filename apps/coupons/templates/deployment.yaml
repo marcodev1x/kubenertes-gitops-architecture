@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coupons
+  labels:
+    app: coupons
+    version: v1
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: coupons
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: coupons
+        version: v1
+      annotations:
+        sidecar.istio.io/proxyCPU: "{{ .Values.istio.proxy.cpu }}"
+        sidecar.istio.io/proxyMemory: "{{ .Values.istio.proxy.memory }}"
+        sidecar.istio.io/proxyCPULimit: "{{ .Values.istio.proxy.cpuLimit }}"
+        sidecar.istio.io/proxyMemoryLimit: "{{ .Values.istio.proxy.memoryLimit }}"
+        traffic.sidecar.istio.io/excludeInboundPorts: "{{ .Values.metricsPort }}"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.metricsPort }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: coupons
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: coupons
+      containers:
+        - name: coupons
+          image: "{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: grpc
+              containerPort: 9090
+            - name: http-metrics
+              containerPort: 19090
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 19090
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 19090
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 19090
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          env:
+            - name: GOMEMLIMIT
+              value: {{ .Values.goMemLimit | quote }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.secretEnv }}
+            - name: {{ $k }}
+              valueFrom:
+                secretKeyRef:
+                  name: audita
+                  key: {{ $v }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: audita-config
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

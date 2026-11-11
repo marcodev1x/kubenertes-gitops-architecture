@@ -1,0 +1,70 @@
+image:
+  name: ghcr.io/****/client
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 384Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPU: 70
+
+istio:
+  proxy:
+    cpu: 25m
+    memory: 48Mi
+    cpuLimit: 200m
+    memoryLimit: 192Mi
+
+goMemLimit: 307MiB
+
+env:
+  DB_NAME: "client"
+  LIMITS_HOST: "limits:9090"
+
+secretEnv:
+  REDIS_PASSWORD: redis-password
+  MONGODB_URL: mongodb-url
+  TOKEN_SECRET_SECURE_VALUE: token-secret
+
+metricsPort: 19090
+
+cronjobs:
+  - name: expire-tastings
+    command: expire-tastings
+    schedule: "0 3 * * *"
+    deadline: 900
+    goMemLimit: "307MiB"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi
+  # Once a day on purpose: a second run on the same day mails every trial again.
+  - name: alert-companies
+    command: alert-companies
+    schedule: "0 12 * * *"
+    deadline: 900
+    goMemLimit: "307MiB"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi

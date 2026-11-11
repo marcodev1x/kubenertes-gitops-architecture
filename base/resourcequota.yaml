@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: audita
+  namespace: audita
+spec:
+  hard:
+    requests.cpu: "3"
+    requests.memory: 7Gi
+
+    limits.cpu: "32"
+    limits.memory: 20Gi
+
+    pods: "45"
+    count/cronjobs.batch: "6"

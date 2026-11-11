@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: audita
+  namespace: argocd
+spec:
+  description: Microsserviços do PNCP
+  sourceRepos:
+    - https://github.com/****/infrastructure.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: audita
+    - server: https://kubernetes.default.svc
+      namespace: audita-staging
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    - server: https://kubernetes.default.svc
+      namespace: istio-system
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

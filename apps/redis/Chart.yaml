@@ -1,0 +1,6 @@
+apiVersion: v2
+name: redis
+description: Redis usado como cache (sem persistência, com teto de memória).
+type: application
+version: 1.0.0
+appVersion: "8"

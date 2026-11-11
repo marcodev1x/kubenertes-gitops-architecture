@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: audita-staging
+  labels:
+    name: audita-staging
+    istio-injection: enabled

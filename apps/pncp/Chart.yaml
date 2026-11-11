@@ -1,0 +1,6 @@
+apiVersion: v2
+name: pncp
+description: Cliente da API pública do PNCP.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

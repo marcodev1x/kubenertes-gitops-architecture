@@ -1,0 +1,22 @@
+image:
+  name: ghcr.io/****/audita-web
+  tag: latest
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 30m
+    memory: 160Mi
+  limits:
+    cpu: "600m"
+    memory: 384Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPU: 80
+
+ingress:
+  enabled: false

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: webhooks
+description: Recebe as notificações do Mercado Pago e publica os eventos no Kafka.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

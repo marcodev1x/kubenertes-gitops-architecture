@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bids
+  labels:
+    app: bids
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: bids

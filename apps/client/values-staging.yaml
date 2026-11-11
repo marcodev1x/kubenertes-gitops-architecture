@@ -1,0 +1,21 @@
+image:
+  name: ghcr.io/****/client
+  tag: latest
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 30m
+    memory: 96Mi
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPU: 80
+
+goMemLimit: 204MiB

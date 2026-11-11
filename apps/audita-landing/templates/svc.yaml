@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: audita-landing
+  labels:
+    app: audita-landing
+spec:
+  selector:
+    app: audita-landing
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      appProtocol: http
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: audita-landing-destination
+  labels:
+    app: audita-landing
+spec:
+  host: audita-landing
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      tcp:
+        maxConnections: 64
+        connectTimeout: 3s
+      http:
+        http2MaxRequests: 256
+        maxRequestsPerConnection: 0
+        maxRetries: 2
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+---
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: audita-landing-route
+  labels:
+    app: audita-landing
+spec:
+  hosts:
+    {{- range .Values.ingress.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  gateways:
+    - audita-gateway
+  http:
+    - match:
+        - uri:
+            prefix: {{ .Values.ingress.prefix }}
+      timeout: {{ .Values.ingress.timeout }}
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: connect-failure,refused-stream,unavailable
+      route:
+        - destination:
+            host: audita-landing
+            subset: v1
+            port:
+              number: 3000
+{{- end }}

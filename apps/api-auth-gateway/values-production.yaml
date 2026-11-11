@@ -1,0 +1,19 @@
+image:
+  name: ghcr.io/****/audita-api-auth-gateway
+  tag: latest
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 60m
+    memory: 96Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPU: 70

@@ -1,0 +1,36 @@
+image:
+  name: ghcr.io/****/pncp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+
+istio:
+  proxy:
+    cpu: 25m
+    memory: 48Mi
+    cpuLimit: 200m
+    memoryLimit: 192Mi
+
+goMemLimit: 204MiB
+
+env: {}
+
+secretEnv:
+  REDIS_PASSWORD: redis-password
+
+metricsPort: 19090

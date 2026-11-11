@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongo-backup
+  labels:
+    app: mongo-backup
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  timeZone: America/Sao_Paulo
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ .Values.deadline }}
+      template:
+        metadata:
+          labels:
+            app: mongo-backup
+          annotations:
+            sidecar.istio.io/inject: "false"
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: dump
+              image: "{{ .Values.images.dump.name }}:{{ .Values.images.dump.tag }}"
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              command: ["sh", "-c"]
+              args:
+                - mongodump --uri="$MONGODB_URL" --gzip --archive="/backup/$(date -u +%Y-%m-%dT%H%MZ).archive.gz"
+              env:
+                - name: MONGODB_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: audita
+                      key: mongodb-url
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+{{ toYaml .Values.resources.dump | indent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          containers:
+            - name: upload
+              image: "{{ .Values.images.upload.name }}:{{ .Values.images.upload.tag }}"
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              command: ["sh", "-c"]
+              args:
+                - rclone copy /backup r2:{{ .Values.bucket }}/{{ .Values.prefix }} && rclone delete --min-age {{ .Values.retention }} r2:{{ .Values.bucket }}/{{ .Values.prefix }}
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: RCLONE_CONFIG_R2_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_R2_PROVIDER
+                  value: Cloudflare
+                - name: RCLONE_CONFIG_R2_ENDPOINT
+                  value: {{ .Values.endpoint | quote }}
+                - name: RCLONE_CONFIG_R2_NO_CHECK_BUCKET
+                  value: "true"
+                - name: RCLONE_CONFIG_R2_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: audita
+                      key: backup-access-key-id
+                - name: RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: audita
+                      key: backup-secret-key
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+{{ toYaml .Values.resources.upload | indent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backup
+              emptyDir:
+                sizeLimit: {{ .Values.storage }}
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi

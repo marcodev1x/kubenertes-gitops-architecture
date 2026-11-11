@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: base
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: audita
+  source:
+    repoURL: https://github.com/****/infrastructure.git
+    targetRevision: main
+    path: base
+    directory:
+      exclude: "secret.example.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: audita
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

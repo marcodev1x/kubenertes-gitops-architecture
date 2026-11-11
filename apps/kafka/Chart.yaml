@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kafka
+description: Broker Kafka em modo KRaft, nó único, afinado para VPS pequena.
+type: application
+version: 1.0.0
+appVersion: "4.1.0"

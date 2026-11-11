@@ -1,0 +1,24 @@
+domain: "****"
+
+hosts:
+  api: api.****
+  auth: api-auth.****
+  app: app.****
+  www: "****"
+
+staging:
+  enabled: true
+  namespace: audita-staging
+  hosts:
+    api: stg-api.****
+    auth: stg-api-auth.****
+    app: stg-app.****
+
+tls:
+  enabled: true
+  secretName: audita-tls
+  issuer: letsencrypt-prod
+  email: contato@****
+
+mtls:
+  mode: STRICT

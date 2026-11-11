@@ -1,0 +1,19 @@
+image:
+  name: apache/kafka-native
+  tag: "4.1.0"
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 384Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
+
+persistence:
+  storageClass: local-path
+  size: 8Gi
+
+partitions: 3
+retentionHours: 48

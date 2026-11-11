@@ -1,0 +1,77 @@
+{{- range .Values.cronjobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bids-{{ .name }}
+  labels:
+    app: bids
+    job: {{ .name }}
+spec:
+  schedule: {{ .schedule | quote }}
+  timeZone: America/Sao_Paulo
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .deadline }}
+      template:
+        metadata:
+          labels:
+            app: bids
+            job: {{ .name }}
+          annotations:
+            sidecar.istio.io/proxyCPU: "25m"
+            sidecar.istio.io/proxyMemory: "48Mi"
+            sidecar.istio.io/proxyCPULimit: "200m"
+            sidecar.istio.io/proxyMemoryLimit: "192Mi"
+        spec:
+          serviceAccountName: bids
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: bids-{{ .name }}
+              image: "{{ $.Values.image.name }}:{{ $.Values.image.tag }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["bids-cli"]
+              args: [{{ .command | quote }}]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+{{ toYaml .resources | indent 16 }}
+              env:
+                - name: GOMEMLIMIT
+                  value: {{ .goMemLimit | quote }}
+                {{- range $k, $v := $.Values.env }}
+                - name: {{ $k }}
+                  value: {{ $v | quote }}
+                {{- end }}
+                {{- range $k, $v := $.Values.secretEnv }}
+                - name: {{ $k }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: audita
+                      key: {{ $v }}
+                {{- end }}
+              envFrom:
+                - configMapRef:
+                    name: audita-config
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
+{{- end }}

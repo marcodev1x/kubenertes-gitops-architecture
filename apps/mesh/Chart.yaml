@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mesh
+description: Configuração da malha Istio do Audita — gateway, mTLS, rotas e escopo dos sidecars.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

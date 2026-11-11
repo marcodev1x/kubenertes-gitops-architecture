@@ -1,0 +1,12 @@
+# segredos reais nunca entram aqui — só o secret.example.yaml mascarado
+secret.yaml
+*.secret.yaml
+.env*
+*.pem
+*.key
+id_rsa*
+
+# IDE
+.idea/
+.vscode/
+.claude/

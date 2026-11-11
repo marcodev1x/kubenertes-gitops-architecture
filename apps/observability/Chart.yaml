@@ -1,0 +1,6 @@
+apiVersion: v2
+name: observability
+description: VictoriaMetrics, VictoriaLogs, Vector e Grafana. Fora da malha, com disco.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

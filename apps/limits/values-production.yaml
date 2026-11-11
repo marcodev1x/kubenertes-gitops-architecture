@@ -1,0 +1,19 @@
+image:
+  name: ghcr.io/****/limits
+  tag: latest
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: "400m"
+    memory: 192Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPU: 75

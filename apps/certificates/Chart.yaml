@@ -1,0 +1,6 @@
+apiVersion: v2
+name: certificates
+description: Certidões da pasta de habilitação e o aviso de vencimento.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

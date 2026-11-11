@@ -1,0 +1,187 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-routes
+  labels:
+    app: mesh
+spec:
+  hosts:
+    - {{ .Values.hosts.api | quote }}
+  gateways:
+    - audita-gateway
+  http:
+    - name: webhooks
+      match:
+        - uri:
+            prefix: /v1/webhooks/
+      timeout: 30s
+      retries:
+        attempts: 0
+      route:
+        - destination:
+            host: webhooks
+            subset: v1
+            port:
+              number: 8080
+
+    - name: api
+      match:
+        - uri:
+            prefix: /api/
+      timeout: 30s
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: connect-failure,refused-stream,unavailable
+      corsPolicy:
+        allowOrigins:
+          - exact: https://{{ .Values.hosts.app }}
+          - exact: https://{{ .Values.hosts.www }}
+          - exact: https://www.{{ .Values.domain }}
+        allowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        allowHeaders: [content-type, authorization]
+        maxAge: 24h
+      route:
+        - destination:
+            host: api-gateway
+            subset: v1
+            port:
+              number: 8080
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: auth-routes
+  labels:
+    app: mesh
+spec:
+  hosts:
+    - {{ .Values.hosts.auth | quote }}
+  gateways:
+    - audita-gateway
+  http:
+    - name: auth
+      match:
+        - uri:
+            prefix: /api/auth/
+      timeout: 20s
+      retries:
+        attempts: 2
+        perTryTimeout: 8s
+        retryOn: connect-failure,refused-stream
+      corsPolicy:
+        allowOrigins:
+          - exact: https://{{ .Values.hosts.app }}
+        allowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        allowHeaders: [content-type, authorization]
+        exposeHeaders: [authorization, x-access-token, x-auth-token]
+        maxAge: 24h
+      route:
+        - destination:
+            host: api-auth-gateway
+            subset: v1
+            port:
+              number: 8080
+
+{{- if .Values.staging.enabled }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-routes-staging
+  labels:
+    app: mesh
+spec:
+  hosts:
+    - {{ .Values.staging.hosts.api | quote }}
+  gateways:
+    - audita-gateway
+  http:
+    - name: webhooks
+      match:
+        - uri:
+            prefix: /v1/webhooks/
+      timeout: 30s
+      retries:
+        attempts: 0
+      route:
+        - destination:
+            host: webhooks.{{ .Values.staging.namespace }}.svc.cluster.local
+            port:
+              number: 8080
+
+    - name: api
+      match:
+        - uri:
+            prefix: /api/
+      timeout: 30s
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: connect-failure,refused-stream,unavailable
+      corsPolicy:
+        allowOrigins:
+          - exact: https://{{ .Values.staging.hosts.app }}
+        allowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        allowHeaders: [content-type, authorization]
+        maxAge: 24h
+      route:
+        - destination:
+            host: api-gateway.{{ .Values.staging.namespace }}.svc.cluster.local
+            port:
+              number: 8080
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: auth-routes-staging
+  labels:
+    app: mesh
+spec:
+  hosts:
+    - {{ .Values.staging.hosts.auth | quote }}
+  gateways:
+    - audita-gateway
+  http:
+    - name: auth
+      match:
+        - uri:
+            prefix: /api/auth/
+      timeout: 20s
+      retries:
+        attempts: 2
+        perTryTimeout: 8s
+        retryOn: connect-failure,refused-stream
+      corsPolicy:
+        allowOrigins:
+          - exact: https://{{ .Values.staging.hosts.app }}
+        allowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        allowHeaders: [content-type, authorization]
+        exposeHeaders: [authorization, x-access-token, x-auth-token]
+        maxAge: 24h
+      route:
+        - destination:
+            host: api-auth-gateway.{{ .Values.staging.namespace }}.svc.cluster.local
+            port:
+              number: 8080
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: audita-web-staging-route
+  labels:
+    app: mesh
+spec:
+  hosts:
+    - {{ .Values.staging.hosts.app | quote }}
+  gateways:
+    - audita-gateway
+  http:
+    - name: web
+      timeout: 30s
+      route:
+        - destination:
+            host: audita-web.{{ .Values.staging.namespace }}.svc.cluster.local
+            port:
+              number: 3000
+{{- end }}

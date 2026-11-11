@@ -1,0 +1,34 @@
+images:
+  dump:
+    name: mongo
+    tag: "8.0"
+  upload:
+    name: rclone/rclone
+    tag: "1.75"
+  pullPolicy: IfNotPresent
+
+schedule: "0 4 * * *"
+deadline: 1800
+retention: 30d
+
+bucket: "****"
+prefix: mongo
+endpoint: "https://****.r2.cloudflarestorage.com"
+
+storage: 1Gi
+
+resources:
+  dump:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  upload:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 192Mi

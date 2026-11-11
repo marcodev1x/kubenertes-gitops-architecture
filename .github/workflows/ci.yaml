@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  HELM_VERSION: v3.21.4
+  KUBECONFORM_VERSION: v0.8.0
+  KUBERNETES_VERSION: "1.34.0"
+
+jobs:
+  charts:
+    name: Charts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+
+      - name: Lint and render
+        run: |
+          status=0
+          for chart in apps/*/; do
+            name=$(basename "$chart")
+            values=(--values "${chart}values.yaml")
+            if [ -f "${chart}values-production.yaml" ]; then
+              values+=(--values "${chart}values-production.yaml")
+            fi
+
+            echo "::group::$name"
+            helm lint "$chart" "${values[@]}" || status=1
+            helm template "$name" "$chart" "${values[@]}" --namespace audita \
+              | kubeconform -strict -ignore-missing-schemas \
+                  -kubernetes-version "$KUBERNETES_VERSION" -summary || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  manifests:
+    name: Manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Parse ArgoCD and base manifests
+        run: |
+          status=0
+          for file in argocd/*.yaml base/*.yaml; do
+            yq ea 'true' "$file" > /dev/null || { echo "invalid: $file"; status=1; }
+          done
+          exit $status
+
+      - name: Every chart is reachable by the ApplicationSet
+        run: |
+          status=0
+          for chart in apps/*/; do
+            [ -f "${chart}Chart.yaml" ] || { echo "missing Chart.yaml: $chart"; status=1; }
+            [ -f "${chart}values.yaml" ] || { echo "missing values.yaml: $chart"; status=1; }
+          done
+          exit $status

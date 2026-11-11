@@ -1,0 +1,19 @@
+image:
+  name: ghcr.io/****/bids
+  tag: latest
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 125m
+    memory: 256Mi
+  limits:
+    cpu: "1500m"
+    memory: 768Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPU: 70

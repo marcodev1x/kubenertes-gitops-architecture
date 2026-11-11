@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mailer
+description: Envio de e-mail (SMTP) e WhatsApp (Meta).
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

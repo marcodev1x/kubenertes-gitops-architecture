@@ -1,0 +1,74 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: audita-gateway
+  labels:
+    app: mesh
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - {{ .Values.hosts.api | quote }}
+        - {{ .Values.hosts.auth | quote }}
+        - {{ .Values.hosts.app | quote }}
+        - {{ .Values.hosts.www | quote }}
+        - "www.{{ .Values.domain }}"
+        {{- if .Values.staging.enabled }}
+        - {{ .Values.staging.hosts.api | quote }}
+        - {{ .Values.staging.hosts.auth | quote }}
+        - {{ .Values.staging.hosts.app | quote }}
+        {{- end }}
+      tls:
+        httpsRedirect: true
+
+    {{- if .Values.tls.enabled }}
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - {{ .Values.hosts.api | quote }}
+        - {{ .Values.hosts.auth | quote }}
+        - {{ .Values.hosts.app | quote }}
+        - {{ .Values.hosts.www | quote }}
+        - "www.{{ .Values.domain }}"
+        {{- if .Values.staging.enabled }}
+        - {{ .Values.staging.hosts.api | quote }}
+        - {{ .Values.staging.hosts.auth | quote }}
+        - {{ .Values.staging.hosts.app | quote }}
+        {{- end }}
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.tls.secretName }}
+    {{- end }}
+---
+{{- if .Values.tls.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: audita-tls
+  namespace: istio-system
+  labels:
+    app: mesh
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  issuerRef:
+    name: {{ .Values.tls.issuer }}
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ .Values.hosts.api | quote }}
+    - {{ .Values.hosts.auth | quote }}
+    - {{ .Values.hosts.app | quote }}
+    - {{ .Values.hosts.www | quote }}
+    - "www.{{ .Values.domain }}"
+    {{- if .Values.staging.enabled }}
+    - {{ .Values.staging.hosts.api | quote }}
+    - {{ .Values.staging.hosts.auth | quote }}
+    - {{ .Values.staging.hosts.app | quote }}
+    {{- end }}
+{{- end }}

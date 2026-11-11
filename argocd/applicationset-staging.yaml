@@ -1,0 +1,53 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: audita-services-staging
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/****/infrastructure.git
+        revision: main
+        directories:
+          - path: apps/*
+          - path: apps/observability
+            exclude: true
+          - path: apps/mesh
+            exclude: true
+          - path: apps/mongo-backup
+            exclude: true
+  template:
+    metadata:
+      name: "{{path.basename}}-staging"
+    spec:
+      project: audita
+      source:
+        repoURL: https://github.com/****/infrastructure.git
+        targetRevision: main
+        path: "{{path}}"
+        helm:
+          valueFiles:
+            - values.yaml
+            - values-staging.yaml
+          ignoreMissingValueFiles: true
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: audita-staging
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=false
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas

@@ -1,0 +1,56 @@
+image:
+  name: ghcr.io/****/certificates
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 192Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPU: 75
+
+istio:
+  proxy:
+    cpu: 25m
+    memory: 48Mi
+    cpuLimit: 200m
+    memoryLimit: 192Mi
+
+goMemLimit: 153MiB
+
+env:
+  DB_NAME: "certificates"
+  CLIENT_HOST: "client:9090"
+
+secretEnv:
+  REDIS_PASSWORD: redis-password
+  MONGODB_URL: mongodb-url
+
+metricsPort: 19090
+
+cronjobs:
+  - name: expiring-alert
+    command: send-certificates-expiring-alert
+    schedule: "0 9 * * *"
+    deadline: 900
+    goMemLimit: "204MiB"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: "500m"
+        memory: 256Mi

@@ -1,0 +1,44 @@
+{
+  "name": "bids_search",
+  "collectionName": "bids",
+  "database": "bids",
+  "mappings": {
+    "dynamic": false,
+    "fields": {
+      "title": [
+        { "type": "string", "analyzer": "lucene.portuguese", "searchAnalyzer": "lucene.portuguese" },
+        { "type": "string", "analyzer": "lucene.standard", "multi": { "exact": { "type": "string", "analyzer": "lucene.keyword" } } },
+        { "type": "string", "analyzer": "audita.radical", "multi": { "radical": { "type": "string", "analyzer": "audita.radical" } } }
+      ],
+      "object": [
+        { "type": "string", "analyzer": "lucene.portuguese", "searchAnalyzer": "lucene.portuguese" },
+        { "type": "string", "analyzer": "lucene.standard", "multi": { "exact": { "type": "string", "analyzer": "lucene.keyword" } } },
+        { "type": "string", "analyzer": "audita.radical", "multi": { "radical": { "type": "string", "analyzer": "audita.radical" } } }
+      ],
+      "description": [
+        { "type": "string", "analyzer": "lucene.portuguese", "searchAnalyzer": "lucene.portuguese" },
+        { "type": "string", "analyzer": "lucene.standard", "multi": { "exact": { "type": "string", "analyzer": "lucene.keyword" } } },
+        { "type": "string", "analyzer": "audita.radical", "multi": { "radical": { "type": "string", "analyzer": "audita.radical" } } }
+      ],
+      "uf": { "type": "token" },
+      "cityibge": { "type": "token" },
+      "modalitycode": { "type": "token" },
+      "publicationdate": { "type": "date" },
+      "proposalclosingdate": { "type": "date" },
+      "proposalopeningdate": { "type": "date" },
+      "estimatedvalue": { "type": "number" }
+    }
+  },
+  "analyzers": [
+    {
+      "name": "audita.radical",
+      "charFilters": [],
+      "tokenizer": { "type": "standard" },
+      "tokenFilters": [
+        { "type": "lowercase" },
+        { "type": "asciiFolding" },
+        { "type": "edgeGram", "minGram": 4, "maxGram": 12 }
+      ]
+    }
+  ]
+}

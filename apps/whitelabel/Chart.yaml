@@ -1,0 +1,6 @@
+apiVersion: v2
+name: whitelabel
+description: Marca do tenant (cores, logos).
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

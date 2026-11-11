@@ -1,0 +1,180 @@
+name: go-service
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Image name, without the tag.
+        required: true
+        type: string
+      chart:
+        description: Chart directory under apps/ in the infra repo.
+        required: true
+        type: string
+      go-version:
+        description: Go toolchain for lint, test and audit.
+        required: false
+        type: string
+        default: "1.26"
+      dockerfile:
+        description: Dockerfile path in the calling repository.
+        required: false
+        type: string
+        default: Dockerfile
+      test-flags:
+        description: Extra flags for go test.
+        required: false
+        type: string
+        default: -race -shuffle=on
+    secrets:
+      GOPRIVATE_TOKEN:
+        description: Read access to github.com/**** modules.
+        required: true
+      INFRA_TOKEN:
+        description: Write access to the infrastructure repository.
+        required: true
+
+env:
+  GOPRIVATE: github.com/****/*
+  INFRA_REPO: ****/infrastructure
+
+jobs:
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Authenticate private modules
+        env:
+          TOKEN: ${{ secrets.GOPRIVATE_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ${{ inputs.test-flags }} -covermode=atomic -coverprofile=cover.out ./...
+
+      - name: Coverage
+        run: |
+          echo "Coverage: $(go tool cover -func=cover.out | tail -1 | awk '{print $3}')" >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Image
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ inputs.image }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: ${{ github.event_name == 'push' && 'mode=max' || 'false' }}
+          sbom: ${{ github.event_name == 'push' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secrets: |
+            gh_token=${{ secrets.GOPRIVATE_TOKEN }}
+
+  deploy:
+    name: Deploy
+    needs: image
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: gitops-${{ inputs.chart }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INFRA_REPO }}
+          ref: main
+          token: ${{ secrets.INFRA_TOKEN }}
+
+      - name: Resolve environment
+        id: env
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/staging" ]; then
+            echo "values=apps/${{ inputs.chart }}/values-staging.yaml" >> "$GITHUB_OUTPUT"
+            echo "name=staging" >> "$GITHUB_OUTPUT"
+          else
+            echo "values=apps/${{ inputs.chart }}/values-production.yaml" >> "$GITHUB_OUTPUT"
+            echo "name=production" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set image tag
+        env:
+          SHA: ${{ github.sha }}
+          VALUES: ${{ steps.env.outputs.values }}
+        run: |
+          awk -v sha="$SHA" '
+            /^image:/        { inimg = 1; print; next }
+            /^[^[:space:]#]/ { inimg = 0 }
+            inimg && !done && /^[[:space:]]+tag:[[:space:]]/ {
+              sub(/tag:.*/, "tag: " sha); done = 1
+            }
+                             { print }
+            END { if (!done) { print "image.tag não encontrado em " FILENAME > "/dev/stderr"; exit 1 } }
+          ' "$VALUES" > "$VALUES.new"
+          mv "$VALUES.new" "$VALUES"
+
+      - name: Commit to infra repo
+        env:
+          SHA: ${{ github.sha }}
+          CHART: ${{ inputs.chart }}
+          ENVNAME: ${{ steps.env.outputs.name }}
+          VALUES: ${{ steps.env.outputs.values }}
+        run: |
+          git config user.name "****-ci[bot]"
+          git config user.email "****-ci[bot]@users.noreply.github.com"
+          git add "$VALUES"
+          if git diff --cached --quiet; then
+            echo "\`$CHART\` already at \`$SHA\` in $ENVNAME." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "ci (${CHART}): deploy ${ENVNAME} ${SHA}"
+          for _ in 1 2 3 4 5; do
+            if git push origin main; then
+              echo "\`$CHART\` pinned to \`$SHA\` in $ENVNAME." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            git pull --rebase origin main
+          done
+          exit 1

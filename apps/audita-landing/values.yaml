@@ -1,0 +1,46 @@
+image:
+  name: ghcr.io/****/audita-landing
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 2
+  targetCPU: 80
+
+istio:
+  proxy:
+    cpu: 25m
+    memory: 48Mi
+    cpuLimit: 200m
+    memoryLimit: 192Mi
+
+env:
+  NODE_ENV: "production"
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+  NODE_OPTIONS: "--max-old-space-size=192"
+
+secretEnv: {}
+
+ingress:
+  enabled: true
+  hosts:
+    - "****"
+    - www.****
+  prefix: /
+  timeout: 30s

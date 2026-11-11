@@ -1,0 +1,42 @@
+image:
+  name: ghcr.io/****/cdn
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPU: 70
+
+istio:
+  proxy:
+    cpu: 25m
+    memory: 48Mi
+    cpuLimit: 200m
+    memoryLimit: 192Mi
+
+goMemLimit: 409MiB
+
+env:
+  STORAGE_URL: "https://****.r2.cloudflarestorage.com"
+  PUBLIC_STORAGE_URL: "https://cdn.****"
+
+secretEnv:
+  STORAGE_ACCOUNT_ID: storage-account-id
+  STORAGE_SECRET_KEY: storage-secret-key
+
+metricsPort: 19090

@@ -1,0 +1,66 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victorialogs
+  namespace: audita
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victorialogs
+  template:
+    metadata:
+      labels:
+        app: victorialogs
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: victorialogs
+          image: victoriametrics/victoria-logs:v1.20.0-victorialogs
+          args:
+            - -storageDataPath=/vldata
+            - -retentionPeriod=7d
+          ports:
+            - name: http
+              containerPort: 9428
+          volumeMounts:
+            - name: data
+              mountPath: /vldata
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: victorialogs-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victorialogs-data
+  namespace: audita
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 6Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victorialogs
+  namespace: audita
+spec:
+  selector:
+    app: victorialogs
+  ports:
+    - name: http
+      port: 9428
+      targetPort: 9428
