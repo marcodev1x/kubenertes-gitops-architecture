@@ -1,164 +1,91 @@
-# Kubernetes em produção numa VPS só: GitOps, service mesh e autoscaling
+Production Kubernetes on a Single VPS: GitOps, Service Mesh, and Autoscaling
+Infrastructure for a public procurement monitoring SaaS.
+The platform runs 17 workloads (15 Go services and 2 Next.js frontends), plus Kafka, Redis, and observability, on a single-node k3s cluster hosted on a 12 GB RAM / 4 vCPU VPS. Production and staging share the cluster.
+All workloads are managed through GitOps. Argo CD watches this repository; deploying a new version means changing an image tag in Git.
+About the **** values: this is a public mirror of a private infrastructure repository. Domains, email addresses, GitHub organization, storage endpoints, SMTP host, cluster IDs, and Secret values have been replaced. Charts, policies, CPU and memory settings reflect the actual setup.
+Stack
+Layer	Technology
+Cluster	k3s, single node, Traefik disabled
+GitOps	Argo CD: App of Apps + ApplicationSets with the Git directory generator
+Packaging	Helm, one chart per service, environment-specific values files
+Service mesh	Istio 1.28, native sidecars, STRICT mTLS
+Ingress	Istio IngressGateway + cert-manager (Let's Encrypt, DNS-01)
+Scaling	HPA (autoscaling/v2) based on CPU, PDBs, ResourceQuotas
+Go runtime	GOMEMLIMIT set to approximately 80% of each container's memory limit
+Registry	GHCR, image tags based on commit SHA, SBOM and provenance
+CI	GitHub Actions with reusable workflows per repository type
+Messaging / cache	Kafka 4.1 (KRaft, kafka-native), Redis 8
+Database	MongoDB Atlas (external, for Atlas Search)
+Observability	VictoriaMetrics, VictoriaLogs, Vector, Grafana
+Backups	mongodump CronJob to Cloudflare R2 via rclone; 30-day retention
 
-Infraestrutura de uma plataforma SaaS de monitoramento de licitações públicas.
-São **17 workloads** (15 serviços Go e 2 front-ends Next.js), mais Kafka, Redis e
-observabilidade, rodando em **k3s** numa VPS de 12 GB / 4 vCPU, com **produção e
-staging no mesmo cluster**.
-
-Nada aqui é aplicado à mão. O cluster lê este repositório pelo **ArgoCD**, e o
-deploy de uma versão nova é um commit que troca a tag da imagem.
-
-> **Sobre os `****`:** este é um espelho público do repositório privado de infra.
-> Domínios, e-mails, a organização do GitHub, os endpoints de storage, o host SMTP,
-> os identificadores de cluster e todos os valores de Secret foram trocados por
-> `****`. O resto (charts, políticas, números de CPU e memória) é o que roda.
-
----
-
-## Stack
-
-| Camada | Escolha |
-|---|---|
-| Cluster | k3s (sem Traefik), single node |
-| GitOps | ArgoCD: App of Apps + ApplicationSet com git generator |
-| Empacotamento | Helm, um chart por serviço, values em camadas por ambiente |
-| Service mesh | Istio 1.28 com sidecars nativos, mTLS `STRICT` |
-| Borda | Istio IngressGateway + cert-manager (Let's Encrypt, DNS-01) |
-| Escala | HPA `autoscaling/v2` por CPU, PDB, `ResourceQuota` |
-| Runtime Go | `GOMEMLIMIT` calculado em ~80% do limite de memória do container |
-| Registry | GHCR, imagens com tag = SHA do commit, SBOM e provenance |
-| CI | GitHub Actions com workflows reutilizáveis (um por tipo de repo) |
-| Mensageria / cache | Kafka 4.1 (KRaft, `kafka-native`), Redis 8 |
-| Banco | MongoDB Atlas (externo, por causa do Atlas Search) |
-| Observabilidade | VictoriaMetrics, VictoriaLogs, Vector, Grafana |
-| Backup | CronJob `mongodump` → Cloudflare R2 via rclone, retenção de 30 dias |
-
----
-
-## 1. GitOps com ArgoCD
-
-```mermaid
+1. GitOps with Argo CD
 flowchart LR
-    dev[push no repo do serviço] --> gha[GitHub Actions<br/>build · test · image]
+    dev[Push to service repository] --> gha[GitHub Actions<br/>build · test · image]
     gha -->|push :sha| ghcr[(GHCR)]
-    gha -->|commit image.tag = sha| infra[repo de infra<br/>apps/svc/values-env.yaml]
-    infra -->|pull| argo[ArgoCD]
-    argo -->|sync| prod[namespace audita]
-    argo -->|sync| stg[namespace audita-staging]
+    gha -->|commit image.tag = sha| infra[Infrastructure repository<br/>apps/svc/values-env.yaml]
+    infra -->|pull| argo[Argo CD]
+    argo -->|sync| prod[Production namespace<br/>audita]
+    argo -->|sync| stg[Staging namespace<br/>audita-staging]
     ghcr -.->|imagePullSecret ghcr| prod
     ghcr -.-> stg
-```
+The CI pipeline has no cluster credentials. It can only update this infrastructure repository. A deployment is the commit that changes an image tag; rollback is a git revert or an action from Argo CD history.
+App of Apps
+A single root-app, applied once, points to argocd/. Argo CD then manages:
+Resource	Purpose
+project.yaml	Restricts source repositories and destination namespaces (audita, audita-staging, argocd, istio-system)
+applicationset.yaml	Creates one production Application for each directory under apps/*
+applicationset-staging.yaml	Does the same for staging, excluding shared or production-only components: mesh, observability, and mongo-backup
+base-app.yaml / base-staging-app.yaml	Creates each environment's namespace, ResourceQuota, LimitRange, and ConfigMap
 
-A pipeline **nunca recebe credencial do cluster**. Ela só tem permissão de
-escrita neste repositório. O deploy é o commit que troca a tag, e o rollback é
-um `git revert` desse commit (ou o History na UI do Argo).
-
-**App of Apps.** Um único `root-app` aplicado à mão uma vez aponta para
-`argocd/`. A partir dali o próprio ArgoCD gerencia:
-
-| Recurso | O que faz |
-|---|---|
-| `project.yaml` | `AppProject` que restringe o repositório de origem e os namespaces de destino (`audita`, `audita-staging`, `argocd`, `istio-system`) |
-| `applicationset.yaml` | Gera uma `Application` de **produção** para cada diretório em `apps/*` |
-| `applicationset-staging.yaml` | O mesmo para **staging**, excluindo `mesh`, `observability` e `mongo-backup`, que são compartilhados ou só existem em produção |
-| `base-app.yaml` / `base-staging-app.yaml` | Namespace, `ResourceQuota`, `LimitRange` e `ConfigMap` de cada ambiente |
-
-**Serviço novo não exige mexer no ArgoCD.** Criar `apps/<nome>/` com
-`Chart.yaml` e `values.yaml` já basta: o *git directory generator* encontra o
-diretório e a `Application` aparece sozinha nos dois ambientes.
-
-**Política de sync:**
-
-```yaml
+Adding a service does not require an Argo CD change. Creating apps/<service>/ with a Chart.yaml and values.yaml is enough for the Git directory generator to create its Applications.
+Sync policy
 syncPolicy:
-  automated: { prune: true, selfHeal: true }   # o Git é a verdade; drift é desfeito
+  automated: { prune: true, selfHeal: true }
   syncOptions: [ServerSideApply=true]
   retry: { limit: 5, backoff: { duration: 10s, factor: 2, maxDuration: 3m } }
 ignoreDifferences:
   - group: apps
     kind: Deployment
-    jsonPointers: [/spec/replicas]              # quem manda nas réplicas é o HPA
-```
-
-O `ignoreDifferences` em `/spec/replicas` é o que faz GitOps e HPA conviverem.
-O template omite `replicas` quando o autoscaling está ligado, e o ArgoCD não
-desfaz o que o HPA decidiu. Isso também permite um `kubectl scale --replicas=0`
-no staging inteiro para devolver memória ao nó sem o `selfHeal` religar tudo.
-
----
-
-## 2. Ambientes: staging e produção
-
-Os dois ambientes vivem no mesmo cluster, separados por namespace. O que muda
-entre eles é **um arquivo de values**, não um branch do repositório de infra:
-
-```yaml
+    jsonPointers: [/spec/replicas]
+Git is the source of truth: drift is reverted. /spec/replicas is excluded from comparison so Argo CD does not overwrite the HPA's replica count. The Helm template also omits replicas when autoscaling is enabled. This allows staging to be scaled to zero manually to free memory without Argo CD scaling it back up.
+2. Production and staging
+Both environments run in the same cluster, isolated by namespace. Environment differences are defined in values files, not separate infrastructure branches.
 helm:
   valueFiles:
-    - values.yaml              # base: imagem, env, secretEnv, sidecar, probes
-    - values-production.yaml   # ou values-staging.yaml
-```
+    - values.yaml              # base: image, env, secretEnv, sidecar, probes
+    - values-production.yaml  # or values-staging.yaml
+	Production	Staging
+Namespace	audita	audita-staging
+Service branch that triggers deployment	main	staging
+CI updates	values-production.yaml	values-staging.yaml
+Replicas	HPA, ranges from 1–2 to 2–6 depending on service	1, no HPA
+ResourceQuota requests	3 CPU / 7 Gi, 45 pods	1.5 CPU / 3 Gi, 24 pods
+LimitRange max per container	1536 Mi	768 Mi
+Hosts	api.****, app.****, etc.	stg-api.****, stg-app.****, etc.
+Kafka and Redis	Dedicated instances	Dedicated instances
+Mesh and observability	Shared	Shared
 
-| | Produção | Staging |
-|---|---|---|
-| Namespace | `audita` | `audita-staging` |
-| Branch que dispara o deploy | `main` do serviço | `staging` do serviço |
-| Arquivo atualizado pelo CI | `values-production.yaml` | `values-staging.yaml` |
-| Réplicas | HPA, de 1–2 até 2–6 | 1, sem HPA |
-| `ResourceQuota` (requests) | 3 CPU / 7 Gi, 45 pods | 1,5 CPU / 3 Gi, 24 pods |
-| `LimitRange` (máx. por container) | 1536 Mi | 768 Mi |
-| Hosts | `api.****`, `app.****` … | `stg-api.****`, `stg-app.****` … |
-| Kafka e Redis | próprios | **próprios** |
-| Mesh e observabilidade | compartilhados | compartilhados |
-
-**Por que staging tem Kafka e Redis próprios:** os tópicos têm o mesmo nome nos
-dois ambientes, e as chaves do Redis não têm prefixo por ambiente. Um staging
-apontado para o broker de produção mandaria e-mail de verdade para cliente de
-verdade no primeiro evento publicado.
-
-**Por que o front-end tem uma imagem por ambiente:** variáveis `NEXT_PUBLIC_*`
-entram no bundle em tempo de build. O workflow `web-app` recebe `build-args` e
-`staging-build-args` separados. Sem isso, a imagem de staging sairia apontando
-para a API de produção.
-
----
-
-## 3. Service mesh com Istio: balanceamento real de gRPC e HTTP
-
-### O problema que justifica a malha
-
-Um `Service` ClusterIP balanceia por **conexão** (L4, kube-proxy). gRPC roda
-sobre HTTP/2: o cliente abre **uma** conexão longa e multiplexa todas as
-chamadas nela. Sem malha, subir um serviço para 3 réplicas dá três pods e uma
-fila só, porque a conexão caiu num pod e fica nele.
-
-Com o sidecar Envoy, o HTTP/2 é terminado no proxy e distribuído **por
-requisição** (L7). Cada serviço declara a política na sua `DestinationRule`:
-
-```yaml
+Staging has its own Kafka and Redis because topic names are identical across environments and Redis keys have no environment prefix. Connecting staging to production could trigger real customer emails from a staging event.
+The frontend also gets a separate image per environment. NEXT_PUBLIC_* variables are embedded at build time, so web-app uses separate build-args and staging-build-args. Otherwise, the staging frontend could point to the production API.
+3. Istio service mesh: gRPC and HTTP load balancing
+Why the mesh is needed
+A Kubernetes ClusterIP Service balances connections at L4. Since gRPC uses HTTP/2, a client can keep one long-lived connection and multiplex all requests through it. Without a mesh, multiple replicas may still receive uneven traffic because the connection stays attached to one pod.
+Envoy terminates HTTP/2 and distributes traffic at L7, per request. Each service defines its policy in a DestinationRule:
 trafficPolicy:
   loadBalancer:
-    simple: LEAST_REQUEST          # o pod com menos chamadas pendentes agora
+    simple: LEAST_REQUEST
   connectionPool:
     tcp:  { maxConnections: 64, connectTimeout: 3s }
     http: { http2MaxRequests: 256, maxRequestsPerConnection: 0, maxRetries: 2 }
-  outlierDetection:                # pod que devolve 5xx sai do pool
+  outlierDetection:
     consecutive5xxErrors: 5
     interval: 10s
     baseEjectionTime: 30s
     maxEjectionPercent: 50
-```
-
-`LEAST_REQUEST` em vez de `ROUND_ROBIN` porque o custo das chamadas é desigual:
-uma agregação pesada no Mongo e uma leitura por chave não devem pesar igual.
-
-Na prática, **11 serviços gRPC** (porta 9090, `appProtocol: grpc`) e **6
-serviços HTTP** (gateways, webhooks, CDN e os front-ends) passam pelo mesmo
-mecanismo.
-
-### Borda
-
-```mermaid
+LEAST_REQUEST is used instead of ROUND_ROBIN because request cost varies. A heavy MongoDB aggregation should not count the same as a simple key lookup.
+The mesh handles 11 gRPC services (port 9090, appProtocol: grpc) and 6 HTTP services (gateways, webhooks, CDN, and frontends).
+Ingress
 flowchart LR
     net((Internet)) -->|80 → 301 · 443 TLS| gw[istio-ingressgateway<br/>Gateway + Certificate]
     gw -->|/api/| api[api-gateway]
@@ -170,126 +97,68 @@ flowchart LR
     svcs --> kafka[(Kafka)]
     svcs --> redis[(Redis)]
     svcs --> mongo[(MongoDB Atlas)]
-```
+    • One Gateway serves both environments. Port 80 redirects to HTTPS; TLS certificates are issued by cert-manager through Let's Encrypt DNS-01 challenges.
+    • Each host has a VirtualService with its own timeout, retry, and CORS settings.
+    • The API retries connect-failure, refused-stream, and unavailable. Payment webhooks use retries: 0; the provider already retries, and another retry at the gateway could duplicate processing.
+    • Staging hosts route to *.audita-staging.svc.cluster.local.
+Keeping the mesh within the VPS budget
+Istio's default sidecar request is 100m CPU / 128 MiB. With 23 pods in the mesh, sidecars alone would use close to 3 GiB. These settings reduce that overhead:
+Setting	Location	Effect
+Sidecar request 25m / 48 MiB, limit 200m / 192 MiB	sidecar.istio.io/proxy* pod annotations	About 1 GiB for all sidecars instead of about 3 GiB
+Sidecar resource limits egress to ./* and istio-system/*	apps/mesh/templates/policy.yaml	Envoy loads configuration only for its namespace
+ENABLE_NATIVE_SIDECARS=true	istiod	CronJobs can terminate instead of remaining stuck behind the proxy
+holdApplicationUntilProxyStarts	meshConfig	The application starts after the proxy, avoiding failed initial gRPC calls
+Metrics port excluded from interception	traffic.sidecar.istio.io/excludeInboundPorts	Probes and scrapes reach the process directly
+Kafka, Redis, observability, and backup excluded from injection	sidecar.istio.io/inject: "false"	No L7 benefit for their TCP traffic; saves roughly 100 MiB
 
-- **Um único `Gateway`** atende os hosts dos dois ambientes. A porta 80 só
-  redireciona para HTTPS, e o TLS vem de um `Certificate` do cert-manager
-  (Let's Encrypt, desafio DNS-01).
-- **`VirtualService` por host**, com timeout, retry e CORS na borda. A API faz
-  retry em `connect-failure,refused-stream,unavailable`. Webhooks de pagamento
-  têm `retries: 0`, porque o provedor já reenvia e retry na borda geraria
-  processamento duplicado.
-- Os hosts de staging roteiam para o FQDN `*.audita-staging.svc.cluster.local`.
+PeerAuthentication enforces STRICT mTLS across the namespace. Pods do not accept plaintext traffic from other pods.
+4. HPA and pod scaling
+Every production service except pncp has an autoscaling/v2 HPA based on CPU utilization.
+Service	Min → max	CPU target
+api-gateway, client	2 → 6	70%
+bids	2 → 5	70%
+audita-web, billings, api-auth-gateway	2 → 4	70%
+webhooks, limits	2 → 4	75%
+agents	1 → 3	60%
+cdn, mailer	1 → 3	70%
+automations, coupons, certificates	1 → 3	75%
+whitelabel, audita-landing	1 → 2	80%
+pncp	1 fixed	—
 
-### Malha enxuta para caber numa VPS
-
-O padrão do Istio é 100m / 128 Mi **por sidecar**. Com 23 pods na malha, só os
-sidecars levariam quase 3 GiB. Os ajustes:
-
-| Ajuste | Onde | Efeito |
-|---|---|---|
-| Sidecar 25m / 48 Mi (limite 200m / 192 Mi) | anotações `sidecar.istio.io/proxy*` no pod | ~1 GiB de sidecar no total em vez de ~3 GiB |
-| Recurso `Sidecar` restringindo egress a `./*` e `istio-system/*` | `apps/mesh/templates/policy.yaml` | o proxy carrega a config só do próprio namespace |
-| `ENABLE_NATIVE_SIDECARS=true` | `istiod` | o sidecar vira init container nativo: **CronJobs na malha terminam** em vez de ficar presos no proxy |
-| `holdApplicationUntilProxyStarts` | `meshConfig` | a app não sobe antes do proxy, então a primeira chamada gRPC não falha |
-| Porta de métricas fora da interceptação | `traffic.sidecar.istio.io/excludeInboundPorts` | probes e scrape batem direto no processo |
-| Kafka, Redis, observabilidade e backup fora da malha | `sidecar.istio.io/inject: "false"` | protocolo TCP sem ganho de L7, ~100 Mi a menos |
-
-Segurança da malha: `PeerAuthentication` em **mTLS `STRICT`** no namespace
-inteiro. Nenhum pod aceita tráfego em texto puro de outro pod.
-
----
-
-## 4. HPA: escalando pods extras
-
-Todo serviço de produção, exceto um, tem `HorizontalPodAutoscaler`
-(`autoscaling/v2`) por utilização de CPU:
-
-| Serviço | Mín → máx | Alvo de CPU |
-|---|---:|---:|
-| api-gateway, client | 2 → 6 | 70% |
-| bids | 2 → 5 | 70% |
-| audita-web, billings, api-auth-gateway | 2 → 4 | 70% |
-| webhooks, limits | 2 → 4 | 75% |
-| agents | 1 → 3 | 60% |
-| cdn, mailer | 1 → 3 | 70% |
-| automations, coupons, certificates | 1 → 3 | 75% |
-| whitelabel, audita-landing | 1 → 2 | 80% |
-| pncp | **1 fixo** | — |
-
-```yaml
 behavior:
   scaleUp:   { stabilizationWindowSeconds: 30,  policies: [{ type: Pods, value: 1, periodSeconds: 60 }] }
   scaleDown: { stabilizationWindowSeconds: 300, policies: [{ type: Pods, value: 1, periodSeconds: 120 }] }
-```
+Scale-up adds at most one pod per minute. Scale-down waits for five stable minutes and removes at most one pod every two minutes.
+Scaling decisions
+    • CPU, not memory. Go's heap does not return memory predictably. With GOMEMLIMIT, the process is intentionally kept near its memory budget; a memory-based HPA could scale up and remain at its maximum.
+    • pncp has no HPA. Its rate limiter for the public government API is in process memory. Multiple replicas would multiply the request rate. HPA can be enabled after moving the limiter to Redis.
+    • ResourceQuota caps aggregate demand. HPAs do not coordinate with each other. A pod that exceeds the namespace quota remains Pending instead of pushing the node into OOM. The system degrades rather than taking down the node.
+    • Rolling updates: maxSurge: 1, maxUnavailable: 0; PDBs with maxUnavailable: 1 protect critical services (gateways, webhooks, bids, client, billings, and web). topologySpreadConstraints use hostname and are ready for a second node.
+5. GOMEMLIMIT
+Without GOMEMLIMIT, Go's garbage collector follows GOGC=100 and does not account for the container's cgroup limit. A large allocation can exceed limits.memory before the next GC cycle, causing an OOMKill.
+GOMEMLIMIT makes the runtime more aggressive as the heap approaches its budget. It is set to approximately 80% of the container memory limit, leaving the remaining 20% for goroutine stacks, runtime data structures, and buffers.
+Workload	limits.memory	GOMEMLIMIT
+agents	1 Gi	819 MiB
+bids	768 Mi	614 MiB
+api-gateway, client, billings	384 Mi	307 MiB
+api-auth-gateway, webhooks	256 Mi	204 MiB
+mailer, coupons, limits, etc.	192 Mi	153 MiB
+bids (staging)	384 Mi	307 MiB
+collect-bids CronJob	1 Gi	819 MiB
 
-Sobe rápido, um pod por minuto. Desce devagar, depois de 5 minutos estável e
-um pod a cada 2 minutos, para não oscilar em tráfego com rajadas.
-
-**Decisões:**
-
-- **CPU, nunca memória.** O heap do Go não devolve memória de forma previsível,
-  e com `GOMEMLIMIT` o processo trabalha de propósito perto do teto. Um HPA por
-  memória subiria e ficaria preso no máximo.
-- **`pncp` sem HPA.** O rate limiter contra a API pública do governo vive na
-  memória do processo. Duas réplicas dobrariam a taxa de chamadas. O HPA só será
-  ligado quando o limitador for para o Redis.
-- **O HPA não derruba o nó.** A `ResourceQuota` do namespace é o teto conjunto:
-  16 autoscalers não se coordenam entre si, e o pod que estouraria a quota fica
-  `Pending` em vez de levar o nó a OOM. O sistema degrada em vez de quebrar.
-- **Rollout sem janela:** `maxSurge: 1, maxUnavailable: 0`, `PodDisruptionBudget`
-  (`maxUnavailable: 1`) nos serviços do caminho crítico (gateways, webhooks,
-  bids, client, billings, web) e `topologySpreadConstraints` por hostname, que
-  já espalham as réplicas no dia em que existir um segundo nó.
-
----
-
-## 5. `GOMEMLIMIT`: pressionando o GC antes do OOMKill
-
-Sem `GOMEMLIMIT`, o GC do Go dispara pelo `GOGC=100` (quando o heap dobra) e não
-sabe que existe um limite de cgroup. Um pico de alocação passa do `limits.memory`
-antes do GC acordar, e o kernel mata o container.
-
-Com `GOMEMLIMIT`, o runtime passa a conhecer o teto e o GC fica **mais
-agressivo à medida que o heap se aproxima dele**. Aqui o valor é sempre ~80% do
-limite do container, e os 20% restantes ficam para o que não é heap: stacks de
-goroutine, estruturas do runtime e buffers.
-
-| Workload | `limits.memory` | `GOMEMLIMIT` |
-|---|---:|---:|
-| agents | 1 Gi | 819 MiB |
-| bids | 768 Mi | 614 MiB |
-| api-gateway, client, billings | 384 Mi | 307 MiB |
-| api-auth-gateway, webhooks | 256 Mi | 204 MiB |
-| mailer, coupons, limits … | 192 Mi | 153 MiB |
-| bids (staging) | 384 Mi | 307 MiB |
-| CronJob `collect-bids` | 1 Gi | 819 MiB |
-
-O valor é injetado como env no Deployment (`{{ .Values.goMemLimit }}`), muda por
-ambiente junto com o limite, e **cada CronJob tem o seu**, porque um job de
-coleta tem um perfil de memória diferente do servidor que divide a imagem com ele.
-
-Para os front-ends Node, o equivalente é `NODE_OPTIONS=--max-old-space-size`.
-
----
-
-## 6. ConfigMaps, envs e Secrets
-
-A configuração chega ao pod por três camadas, todas declaradas no chart:
-
-```yaml
-# values.yaml de um serviço
-env:                              # 1. específico do serviço, em texto
+The value is injected into each Deployment through {{ .Values.goMemLimit }} and changes with the environment's memory limit. CronJobs define their own value because jobs such as data collection have a different memory profile from the service process sharing the image.
+For the Next.js frontends, NODE_OPTIONS=--max-old-space-size sets the Node.js heap limit.
+6. ConfigMaps, environment variables, and Secrets
+Configuration reaches each pod through three layers:
+# Service values.yaml
+env:
   DB_NAME: "bids"
-  CLIENT_HOST: "client:9090"      #    service discovery pelo DNS do cluster
+  CLIENT_HOST: "client:9090"
   MAILER_HOST: "mailer:9090"
 
-secretEnv:                        # 2. VAR_DE_AMBIENTE: chave-no-Secret
+secretEnv:
   MONGODB_URL: mongodb-url
   REDIS_PASSWORD: redis-password
-```
-
-```yaml
 # templates/deployment.yaml
 env:
   - name: GOMEMLIMIT
@@ -304,59 +173,28 @@ env:
       secretKeyRef: { name: audita, key: {{ $v }} }
   {{- end }}
 envFrom:
-  - configMapRef: { name: audita-config }   # 3. compartilhado do ambiente
-```
+  - configMapRef: { name: audita-config }
+Layer	Contents	Stored in
+ConfigMap audita-config	Kafka and Redis addresses, public frontend URLs, auth, and CDN	base/ and base-staging/, one per namespace
+env	Database name and addresses of neighboring services	Each service's values.yaml
+secretEnv → Secret audita	Database credentials, payment gateway, LLM, SMTP, and storage credentials	Outside Git
 
-| Camada | O que guarda | Onde vive |
-|---|---|---|
-| `ConfigMap audita-config` | Endereços de Kafka e Redis, URLs públicas do front, auth e CDN | `base/` e `base-staging/`, um por namespace |
-| `env` | Nome do banco, endereços dos serviços vizinhos | `values.yaml` do chart |
-| `secretEnv` → `Secret audita` | Credenciais de banco, gateway de pagamento, LLM, SMTP, storage | **fora do Git** |
-
-- **Cada serviço só recebe as chaves que declara.** O Secret é um só, mas o
-  `api-gateway` não vê o token do gateway de pagamento, e o `mailer` não vê a URL
-  do banco.
-- **O Secret nunca é commitado.** `base/secret.example.yaml` documenta as chaves
-  (com `****` aqui) e é excluído do sync do ArgoCD (`directory.exclude`). O valor
-  real é criado no cluster no bootstrap.
-
----
-
-## 7. GHCR: de onde as imagens vêm
-
-- O CI publica em `ghcr.io/****/<serviço>` com o `GITHUB_TOKEN` do próprio
-  repositório (`packages: write`). A tag é **o SHA completo do commit**, nunca
-  `latest`: se a tag não muda, o manifesto não muda e o ArgoCD não tem o que
-  sincronizar.
-- Cada imagem sai com **SBOM e provenance** (`mode=max`), e o build usa cache do
-  GitHub Actions.
-- Módulos Go privados entram no build via **BuildKit secret**
-  (`--mount=type=secret,id=gh_token`), sem token gravado em camada da imagem.
-- No cluster, um secret `docker-registry` chamado `ghcr` em cada namespace
-  (`scripts/create-ghcr-secret.sh`, que também cobre a rotação do token) é
-  anexado ao **ServiceAccount** de cada serviço:
-
-```yaml
+Each service receives only the Secret keys it declares. For example, api-gateway does not get the payment gateway token, and mailer does not get the database URL.
+Secrets are never committed. base/secret.example.yaml documents the required keys and is excluded from Argo CD sync through directory.exclude. Real values are created in the cluster during bootstrap.
+7. GHCR image registry
+    • CI publishes images to ghcr.io/****/<service> using the repository's GITHUB_TOKEN with packages: write permission.
+    • Image tags use the full commit SHA, never latest. If the tag does not change, the manifest does not change and Argo CD has nothing to sync.
+    • Each image includes an SBOM and provenance (mode=max); builds use GitHub Actions cache.
+    • Private Go modules are downloaded using a BuildKit secret (--mount=type=secret,id=gh_token), so the token is not stored in an image layer.
+    • Each namespace has a docker-registry Secret named ghcr. scripts/create-ghcr-secret.sh creates it and supports token rotation. It is attached to each service's ServiceAccount:
 apiVersion: v1
 kind: ServiceAccount
 automountServiceAccountToken: false
 imagePullSecrets:
   - name: ghcr
-```
-
-Como o secret está no ServiceAccount, Deployments **e** CronJobs do serviço
-puxam a imagem privada sem repetir a configuração. O token da API do Kubernetes
-não é montado, porque nenhum serviço fala com o apiserver.
-
----
-
-## 8. Jobs por CronJob
-
-Rotinas periódicas usam **a mesma imagem do serviço**, chamando um binário de
-CLI (`bids-cli collect-bids`). Elas são declaradas como lista no values, e o
-template gera um `CronJob` para cada item:
-
-```yaml
+Deployments and CronJobs inherit the registry credentials from the ServiceAccount. The Kubernetes API token is not mounted because application services do not communicate with the API server.
+8. Scheduled jobs with CronJobs
+Scheduled tasks use the service's existing image and run a CLI command, for example bids-cli collect-bids. Jobs are configured as a list in the service values; the Helm template creates a CronJob for each entry.
 cronjobs:
   - name: collect-bids
     command: collect-bids
@@ -364,165 +202,94 @@ cronjobs:
     deadline: 3600
     goMemLimit: "819MiB"
     resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
-```
+CronJob	Schedule (America/Sao_Paulo)	Purpose
+bids-collect-bids	07:00, 14:00, 20:00	Fetches tenders from the public API
+bids-send-recommendations	08:00, 15:00, 21:00	Matches new tenders to customer profiles and sends notifications
+client-expire-tastings	03:00	Expires trial periods
+client-alert-companies	12:00	Notifies companies in a trial period, once per day to avoid duplicate emails
+certificates-expiring-alert	09:00	Notifies customers about certificates nearing expiration
+mongo-backup	04:00	Runs mongodump and uploads to R2; 30-day retention
 
-| CronJob | Agenda (America/Sao_Paulo) | O que faz |
-|---|---|---|
-| `bids-collect-bids` | 07h, 14h, 20h | Coleta licitações da API pública |
-| `bids-send-recommendations` | 08h, 15h, 21h | Casa as licitações novas com o perfil de cada cliente e notifica |
-| `client-expire-tastings` | 03h | Expira períodos de teste |
-| `client-alert-companies` | 12h | Avisa as empresas em período de teste (uma vez por dia **de propósito**, porque rodar de novo reenviaria tudo) |
-| `certificates-expiring-alert` | 09h | Avisa certidões perto do vencimento |
-| `mongo-backup` | 04h | `mongodump` → R2, retenção de 30 dias |
-
-Configuração comum:
-
-```yaml
+Common settings:
 timeZone: America/Sao_Paulo
-concurrencyPolicy: Forbid        # nunca duas execuções sobrepostas
+concurrencyPolicy: Forbid
 startingDeadlineSeconds: 300
 jobTemplate:
   spec:
-    backoffLimit: 0              # job que manda e-mail não pode repetir sozinho
-    activeDeadlineSeconds: …     # teto de duração por job
-```
+    backoffLimit: 0
+    activeDeadlineSeconds: …
+Notification jobs use backoffLimit: 0 to avoid resending emails after an automatic retry. The idempotent MongoDB backup uses backoffLimit: 2.
+The backup runs in a pod with two stages: an initContainer runs mongodump --gzip into an emptyDir; the main container uses rclone copy to upload the dump to an S3-compatible bucket, then deletes files older than 30 days with rclone delete --min-age 30d. Credentials come from a Secret, and both containers use read-only filesystems.
+The namespace ResourceQuota also limits the number of CronJobs with count/cronjobs.batch: "6".
+9. Resource governance
+Resource limits are enforced at three levels:
+Layer	Protects against
+Per-container limits	A single service consuming the node through a leak or spike
+GOMEMLIMIT (~80% of the memory limit)	GC running too late and triggering an OOMKill
+Namespace ResourceQuota	Multiple HPAs scaling at the same time
 
-- `backoffLimit: 0` nos jobs de notificação, porque um retry automático mandaria
-  o mesmo e-mail duas vezes. O `mongo-backup`, que é idempotente, usa
-  `backoffLimit: 2`.
-- O **backup** é um pod com duas etapas: um `initContainer` com `mongodump
-  --gzip` grava num `emptyDir`, e o container principal faz `rclone copy` para
-  um bucket S3-compatível, depois `rclone delete --min-age 30d`. As credenciais
-  vêm do Secret, e o filesystem é read-only nos dois.
-- A `ResourceQuota` também limita a quantidade de CronJobs: `count/cronjobs.batch: "6"`.
-
----
-
-## 9. Governança de recursos
-
-Três camadas, da mais específica para a mais geral:
-
-| Camada | Protege contra |
-|---|---|
-| `limits` por container | Um serviço com vazamento comendo o nó |
-| `GOMEMLIMIT` (~80% do limite) | O GC acordar tarde demais e virar OOMKill |
-| `ResourceQuota` do namespace | **Vários HPAs escalando juntos** |
-
-Mais um `LimitRange` por namespace, que dá request e limit padrão a qualquer
-container que esqueça de declarar.
-
-A conta inteira (o que o sistema operacional, o k3s, o istiod e o ArgoCD consomem,
-quanto sobra para escala e page cache e por que staging pede 16 GB) está em
-[`CAPACIDADE.md`](CAPACIDADE.md), medida com `helm template` em todos os charts.
-
----
-
-## 10. Hardening dos pods
-
-Todo workload de aplicação roda com:
-
-```yaml
-securityContext:                       # pod
+Each namespace also has a LimitRange to set default requests and limits for containers that do not declare them.
+CAPACIDADE.md contains the CPU and memory budget, including OS, k3s, istiod, and Argo CD overhead, available scaling headroom, page cache, and why staging needs 16 GB. The figures are measured with helm template across all charts.
+10. Pod security
+Application workloads use the following security context:
+securityContext:
   runAsNonRoot: true
-  runAsUser: 65532                     # nonroot do distroless
+  runAsUser: 65532
   fsGroup: 65532
   seccompProfile: { type: RuntimeDefault }
 containers:
   - securityContext:
       allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true     # escrita só em emptyDir /tmp com sizeLimit
+      readOnlyRootFilesystem: true
       capabilities: { drop: ["ALL"] }
-```
+The image uses the distroless nonroot user. Writable paths are limited to an emptyDir mounted at /tmp, with a sizeLimit.
+Health checks use a dedicated metrics port (19090): startupProbe and livenessProbe call /health; readinessProbe calls /ready.
+11. Observability
+Component	Role
+VictoriaMetrics	Scrapes pods through kubernetes_sd; 3-month retention
+VictoriaLogs	Log storage with 7-day retention and an Elasticsearch-compatible endpoint
+Vector (DaemonSet)	Collects kubernetes_logs from each node and ships them to VictoriaLogs
+Grafana	Datasources provisioned through ConfigMaps
 
-Probes separadas em porta própria de métricas (`19090`): `startupProbe` e
-`livenessProbe` em `/health`, `readinessProbe` em `/ready`.
+The observability stack requests approximately 830 MiB and runs once per cluster, outside the service mesh. It is shared by production and staging.
+12. CI
+Workflow	Used by	Steps
+go-service.yaml	15 Go services	Build · go test -race -shuffle=on with coverage · image · image tag update
+web-app.yaml	2 frontends	bun install --frozen-lockfile · lint · tsc --noEmit · image · image tag update
+ci.yaml	Infrastructure repository	helm lint + helm template \| kubeconform -strict across all charts
 
----
-
-## 11. Observabilidade
-
-| Componente | Papel |
-|---|---|
-| **VictoriaMetrics** | Scrape dos pods via `kubernetes_sd`, retenção de 3 meses |
-| **VictoriaLogs** | Logs com 7 dias de retenção, endpoint compatível com Elasticsearch |
-| **Vector** (DaemonSet) | Coleta `kubernetes_logs` de cada nó e envia ao VictoriaLogs |
-| **Grafana** | Datasources provisionados por ConfigMap |
-
-A stack pede ~830 Mi de request e fica fora da malha. Ela existe uma vez só no
-cluster e não é duplicada em staging.
-
----
-
-## 12. CI
-
-| Workflow | Quem chama | Etapas |
-|---|---|---|
-| `go-service.yaml` | os 15 serviços Go | build · `go test -race -shuffle=on` com cobertura · imagem · bump da tag |
-| `web-app.yaml` | os 2 front-ends | `bun install --frozen-lockfile` · lint · `tsc --noEmit` · imagem · bump da tag |
-| `ci.yaml` | este repositório | `helm lint` + `helm template \| kubeconform -strict` em todos os charts |
-
-Os repositórios de código não têm pipeline próprio. Cada um tem um `ci.yaml` de
-poucas linhas que chama um workflow reutilizável daqui (`workflow_call`), então
-trocar a versão do Go ou o passo de deploy é uma edição só.
-
-O job de deploy tem `concurrency` por chart e faz `pull --rebase` com até 5
-tentativas no push, para que deploys simultâneos de serviços diferentes não
-briguem pelo mesmo `main`.
-
----
-
-## Bootstrap
-
-A ordem importa, e cada passo é pré-requisito do seguinte:
-
-```bash
-./scripts/bootstrap-k3s.sh          # k3s SEM Traefik (o Istio ocupa 80/443) + ArgoCD
+Service repositories do not maintain their own full pipelines. Each has a small ci.yaml that calls a reusable workflow from this repository through workflow_call. Updating the Go version or deployment steps only requires one change.
+The deployment job uses concurrency per chart and retries pull --rebase up to five times before pushing. This prevents deployments from different services from conflicting on the same main branch.
+Bootstrap
+Bootstrap order matters because each step depends on the previous one:
+./scripts/bootstrap-k3s.sh          # k3s without Traefik (Istio uses 80/443) + Argo CD
 kubectl -n cert-manager create secret generic cloudflare-api-token ...
 ./scripts/bootstrap-istio.sh        # cert-manager, ClusterIssuer, istio-base, istiod, ingressgateway
-kubectl -n audita create secret generic audita ...                    # Secret fora do Git
+kubectl -n audita create secret generic audita ...                    # Secret kept outside Git
 GHCR_USER=... GHCR_TOKEN=... ./scripts/create-ghcr-secret.sh
-kubectl apply -f argocd/root-app.yaml                                 # daqui em diante é o ArgoCD
-```
+kubectl apply -f argocd/root-app.yaml                                 # Argo CD manages the rest
+Istio must be installed before applying root-app, because the charts create Gateway, VirtualService, and DestinationRule resources. Sync fails if their CRDs are not installed.
+For local development, scripts/bootstrap-k3s-local.sh runs the same setup on k3d (k3s in Docker) with a self-signed certificate. STAGING=1 adds the staging environment; MINIMAL=1 starts only the cluster and Argo CD.
+Known trade-offs
+Current state	Reason	Next step
+Single node	Cost	topologySpreadConstraints are already in the charts; a second node can spread replicas without chart changes
+Secrets created manually during bootstrap	Initial simplicity	Sealed Secrets or External Secrets to bring Secrets under GitOps
+pncp runs one replica	Rate limiter is in process memory	Move the limiter to Redis, then enable HPA
+agents HPA uses CPU	The pod spends most of its time waiting for the LLM API, with low CPU usage	Scale by queue depth with KEDA or move analysis to Kafka
+Kafka has one broker	Fits the VPS budget	Add brokers and configure min.insync.replicas when more nodes are available
 
-O Istio vem antes do `root-app` porque os charts criam `Gateway`,
-`VirtualService` e `DestinationRule`, e sem os CRDs o sync falha.
-
-**Local:** `scripts/bootstrap-k3s-local.sh` sobe a mesma coisa em **k3d** (k3s
-dentro do Docker), com certificado autoassinado. `STAGING=1` inclui o segundo
-ambiente, e `MINIMAL=1` sobe só o cluster e o ArgoCD.
-
----
-
-## Trade-offs conhecidos
-
-Um case honesto inclui o que ainda não está resolvido:
-
-| Hoje | Por quê | Próximo passo |
-|---|---|---|
-| Um nó só | Custo | `topologySpreadConstraints` já estão nos charts. Um segundo nó espalha as réplicas sem mudar nenhum chart |
-| Secret criado à mão no bootstrap | Simplicidade inicial | Sealed Secrets ou External Secrets, para o Secret também virar GitOps |
-| `pncp` em 1 réplica | Rate limiter em memória | Limitador no Redis, depois HPA |
-| HPA do `agents` por CPU | O pod passa a maior parte do tempo esperando a API do LLM, com CPU perto de zero | Escalar por profundidade de fila (KEDA) ou consumir a análise via Kafka |
-| Kafka com 1 broker | Cabe na VPS | Réplicas e `min.insync.replicas` quando houver mais de um nó |
-
----
-
-## Estrutura
-
-```
+Repository layout
 .
-├── argocd/              App of Apps, AppProject, ApplicationSets (prod e staging)
-├── base/                namespace, quota, limitrange, configmap de produção
-├── base-staging/        o mesmo para staging
+├── argocd/              App of Apps, AppProject, ApplicationSets (production and staging)
+├── base/                Production namespace, quota, LimitRange, ConfigMap
+├── base-staging/        Staging equivalents
 ├── apps/
-│   ├── <serviço>/       Chart + values.yaml + values-production.yaml + values-staging.yaml
+│   ├── <service>/       Chart + values.yaml + values-production.yaml + values-staging.yaml
 │   ├── mesh/            Gateway, Certificate, VirtualServices, PeerAuthentication, Sidecar
-│   ├── kafka/ redis/    dependências in-cluster
+│   ├── kafka/ redis/    In-cluster dependencies
 │   ├── observability/   VictoriaMetrics, VictoriaLogs, Vector, Grafana
-│   └── mongo-backup/    CronJob de backup
-├── atlas/               definição versionada do índice do Atlas Search
-├── scripts/             bootstrap do k3s, do Istio, local (k3d) e secret do GHCR
-├── .github/workflows/   workflows reutilizáveis e validação dos charts
-└── CAPACIDADE.md        a conta de CPU e memória por trás de cada número
-```
-# kubenertes-gitops-architecture
+│   └── mongo-backup/    Backup CronJob
+├── atlas/               Versioned Atlas Search index definition
+├── scripts/             k3s, Istio, local (k3d), and GHCR bootstrap scripts
+├── .github/workflows/   Reusable workflows and chart validation
+└── CAPACIDADE.md        CPU and memory budget behind the resource settings
